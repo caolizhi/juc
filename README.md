@@ -14,11 +14,11 @@ learn juc
 public class AtomicInteger extends Number implements java.io.Serializable {
 
 	private static final jdk.internal.misc.Unsafe U = jdk.internal.misc.Unsafe.getUnsafe();
-	/**
-     * Unsafe 类直接操作内存
-     * 这个 VALUE 的值就是 AtomicInteger 类 value 的内存位置地址的偏移量，
-     * 通过 native 方法，拿到地址指针
-	 */
+      /**
+        * Unsafe 类直接操作内存
+        * 这个 VALUE 的值就是 AtomicInteger 类 value 的内存位置地址的偏移量，
+        * 通过 native 方法，拿到地址指针
+	*/
 	private static final long VALUE = U.objectFieldOffset(AtomicInteger.class, "value");
 
 	private volatile int value;
@@ -66,11 +66,11 @@ public final class Unsafe {
         return compareAndSetObject(o, offset, expected, x);
 	}
 
-	/**
+    /**
      * 如果当前持有expected则以原子方式将 Java 变量更新为x
      * 此操作具有volatile读写的内存语义。 对应于 C11 atomic_compare_exchange_strong。
      * 返回：如果成功则为true
-	 */
+     */
     @HotSpotIntrinsicCandidate
     public final native boolean compareAndSetInt(Object o, long offset,
 	                                        int expected,
@@ -81,4 +81,11 @@ public final class Unsafe {
 我们可以看到注释里面 `atomic_compare_exchange_strong` 函数，这是 C11 原子的函数，反映到处理器的指令上
 就是 `CMPXCHG` 指令，这条指令已经无法再分割，而这条指令执行的时候，通过锁总线来让其他核心处理器都不能访问这个地址。
 简单来说，从 CPU 原语的级别来保证了 CAS 的操作。
+
+#### CAS 的 ABA
+当然 CAS 属于无锁优化，也可以说是乐观锁，但是存在 ABA 的问题，即当前线程取回的值和期望的是一致的，但是中间某个线程操作了这个值，然后又恢复了这个值
+，并且不会影响当前线程的后续操作，实际上是发生了改变，但是 ABA 可以分类型来考虑。
+  - 如果是基础类型，那么改变的值不影响当前线程要用的值。
+  - 如果是引用类型的话，那么在某些场景下会影响结果，就好比你的女朋友和你分手又复合了，但是中间经历了别的男人。
+如何解决 ABA 的问题呢，**可以加一个版本标记，任何一次修改，就会修改这个版本标记，检查的时候版本标记也要一起检查。**
 
