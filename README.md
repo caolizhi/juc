@@ -96,3 +96,7 @@ public final class Unsafe {
   - Phaser 分阶段的栅栏，继承 Phaser 重写 onAdvance()，arriveAndAwaitAdvance() 到了注册 和 arriveAndDeregister() 走了注销
   - Semaphore 限流，acquire() 和 release() 配对使用
   - Exchanger 两个线程之间相互交换数据，定义交换类型，调用 exchange(T) 方法交换数据；
+
+### Synchronized 和 ReentrantLock 的区别
+  - Synchronized 是系统自带的，系统自动加锁，自动解锁，默认进行四种锁状态的升级， wait() 和 notify() 必须用在 synchronized 代码块中，用于多线程协调运行，必须是在有锁的对象上使用。（Lost wake-up problem）
+  - ReentrantLock 需要手动加锁，手动解锁，CAS 的实现。
