@@ -89,3 +89,10 @@ public final class Unsafe {
   - 如果是引用类型的话，那么在某些场景下会影响结果，就好比你的女朋友和你分手又复合了，但是中间经历了别的男人。
 如何解决 ABA 的问题呢，**可以加一个版本标记，任何一次修改，就会修改这个版本标记，检查的时候版本标记也要一起检查。**
 
+### JUC 类总结  
+  - ReentrantLock 比 synchronized 更灵活，更方便，lock() 和 unlock() 配对使用；
+  - CountDownLatch 倒计时为 0，门栓打开，countDown() 和 await() 配对使用；
+  - CycliBarrier  栅栏，循环使用， 人满，栅栏放行，定义 runnable 推倒之后的操作和 await() 使用；
+  - Phaser 分阶段的栅栏，继承 Phaser 重写 onAdvance()，arriveAndAwaitAdvance() 到了注册 和 arriveAndDeregister() 走了注销
+  - Semaphore 限流，acquire() 和 release() 配对使用
+  - Exchanger 两个线程之间相互交换数据，定义交换类型，调用 exchange(T) 方法交换数据；
