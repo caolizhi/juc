@@ -479,7 +479,7 @@ Node 只有两种模式，EXCLUSIVE 和 SHARED，还有个成员变量 waitStatu
 继续看 addWaiter(Node.EXCLUSIVE)方法，首先拿到等待队列的 tail 节点，如果为空就初始化一个队列，头尾都是指向这个 node；
 如果 tail 存在，就把要添加的这个 node 的 prev 指向 tail 节点，因为在操作的过程中，可能其他的线程改动了 tail，所以需要
 CAS 自旋的把 tail 节点的 next 指向这个要添加的 node。一句话就是：addWaiter() 方法就是添加 node 到等待队列的队尾。
-然后返回这个 node
+然后返回这个 node。
 
 添加到队尾之后，执行 acquireQueued(Node.EXCLUSIVE,1)方法，再看一下这个方法：
 ```java
@@ -587,3 +587,8 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
 这个方法就是调用同步辅助工具类 LockSupport.park(this)，阻塞住当前线程。
 
 最后，如果在 lock() 的整个过程中拿到了锁，就会继续执行后面的程序，如果没有就阻塞住，这就是整个 AQS 的源码基本思路。
+
+我们再来关注一下 AQS 为什么效率高？
+主要是 AQS 采用 CAS 来操作链表尾巴，如果好多线程都要往链表尾巴上插入节点，第一想法肯定会加锁，锁定整个 (Sync) 对象，保证线程安全，
+但是锁定整个链表的话，锁的太多太大了，现在 AQS 并不是锁定整个链表的方法，而是观测 tail 这个节点就可以了，用 CAS 是做实现，这就是
+AQS 效率高的核心。
