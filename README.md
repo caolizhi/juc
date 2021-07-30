@@ -598,3 +598,27 @@ AQS 效率高的核心。
 
 Queue 和 List 有什么区别？
 Queue 无非就是比 List 多了一些友好的方法，比如 offer()，peek()， poll()，子类 BlockingQueue还增加了线程阻塞的方法 put(), take()
+
+
+### 线程池
+
+**（1）线程池类关系图**  
+![img.png](images/ThreadPoolExecutor.png)
+
+Executors 是对线程执行的工具类，可以看做是线程池的工厂。
+
+execute 里面执行，submit 等待线程自己调度运行。
+
+**（2）线程池核心参数的交互**  
+  - `corePoolSize` 核心线程数
+  - `maximumPoolSize` 最大线程数
+  - `keepAliveTime` 生存时间，线程池中超过核心线程数大小的线程的存活时间，如果设置 `allowCoreThreadTimeOut` 为 `true`，那么核心线程数也是此时间的存活时间 
+  - `unit` 生存时间的单位，类型是 _`TimeUnit`_
+  - `workQueue` 任务队列 _`BlockingQueue<Runnable>`_
+  - `threadFactory` 线程工厂 _ThreadFactory_
+  - `handler` 拒绝策略， 类型是 _`RejectedExecutionHandler`_
+
+首先线程池中会保持 corePoolSize 大小的线程运行，即使没有任务也会空闲运行，但是如果设置了 allowCoreThreadTimeOut = true，
+那么核心线程也会在 keepAliveTime 时间大小之后关闭。当任务超过了核心线程数的话，会把新的任务放到工作队列，
+如果工作队列满了，并且当前的工作线程是小于 maximumPoolSize 定义的最大线程数的，那么创建一个新线程来运行任务，
+当运行的线程数超过了最大线程数的值，拒绝策略开始发挥作用，默认是丢弃策略。
