@@ -592,3 +592,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
 主要是 AQS 采用 CAS 来操作链表尾巴，如果好多线程都要往链表尾巴上插入节点，第一想法肯定会加锁，锁定整个 (Sync) 对象，保证线程安全，
 但是锁定整个链表的话，锁的太多太大了，现在 AQS 并不是锁定整个链表的方法，而是观测 tail 这个节点就可以了，用 CAS 是做实现，这就是
 AQS 效率高的核心。
+
+
+### 并发容器类
+
+Queue 和 List 有什么区别？
+Queue 无非就是比 List 多了一些友好的方法，比如 offer()，peek()， poll()，子类 BlockingQueue还增加了线程阻塞的方法 put(), take()
