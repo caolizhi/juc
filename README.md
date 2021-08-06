@@ -622,3 +622,246 @@ execute 里面执行，submit 等待线程自己调度运行。
 那么核心线程也会在 keepAliveTime 时间大小之后关闭。当任务超过了核心线程数的话，会把新的任务放到工作队列，
 如果工作队列满了，并且当前的工作线程是小于 maximumPoolSize 定义的最大线程数的，那么创建一个新线程来运行任务，
 当运行的线程数超过了最大线程数的值，拒绝策略开始发挥作用，默认是丢弃策略。
+
+### 线程池源码分析
+
+终于来到了我们的线程池的源码解析啦，因为我们知道jdk自带的各种线程池本质上都是核心类 `ThreadPollExecutor` 构造出来的，所以我们来看里面到到底是个
+什么鬼？
+
+  - #### 成员变量
+
+```java
+public class ThreadPoolExecutor extends AbstractExecutorService {
+	
+	// 高 3 位表示线程池状态，低29位表示 worker 的数量
+	private final AtomicInteger ctl = new AtomicInteger(ctlOf(RUNNING, 0));
+	private static final int COUNT_BITS = Integer.SIZE - 3;  // 32 - 3 = 29
+	
+	/**
+	 *   0010 0000 0000 0000 0000 0000 0000 0000      COUNT_BITS 二进制值
+	   - 0000 0000 0000 0000 0000 0000 0000 0001        1 二进制值
+	 ————————————————————————————————————————————
+	   = 0001 1111 1111 1111 1111 1111 1111 1111      COUNT_MASK 二进制值
+	 * */
+	private static final int COUNT_MASK = (1 << COUNT_BITS) - 1; // 1 * 2^29 -1
+	
+	// runState is stored in the high-order bits
+	private static final int RUNNING    = -1 << COUNT_BITS;  // 表示接收新任务和处理队列中的任务
+	private static final int SHUTDOWN   =  0 << COUNT_BITS;  // 表示不接收新任务了，但是会处理队列中的任务
+	private static final int STOP       =  1 << COUNT_BITS;  // 表示不接收新任务，也不处理队列中的任务，中断进行中的任务
+	private static final int TIDYING    =  2 << COUNT_BITS;  // 如果所有的任务的已经结束，工作线程是0，此时的线程状态转变为 TIDYING，调用 terminated() 钩子方法
+	private static final int TERMINATED =  3 << COUNT_BITS;  // 表示 terminated() 方法执行完成
+
+	// Packing and unpacking ctl
+	// ~COUNT_MASK 值: 1110 0000 0000 0000 0000 0000 0000 0000  
+	// 按位与，低 29 位都是 0
+	private static int runStateOf(int c)     { return c & ~COUNT_MASK; }
+	
+	// COUNT_MASK 二进制值 : 0001 1111 1111 1111 1111 1111 1111 1111 
+	// 按位与，高 3 位都是 0
+	private static int workerCountOf(int c)  { return c & COUNT_MASK; }
+	
+	// 根据线程池状态和线程数量计算 control(ctl) 的值
+	private static int ctlOf(int rs, int wc) { return rs | wc; }
+}
+```
+
+ctl 这个原子整形变量，包含了两个含义，一个是 workerCount，就是线程池里面 worker 数量，另一个是 runState，就是线程池状态，运行还是停止等等。咦，一个变量怎么表示
+的两种意思呢？有一个很巧妙的方法就是高3 位表示线程池的状态，低 29 位来表示线程池中的线程数量，目前来说是29位数量足够的，如果不够，后面会扩展成 Long 类型就可以，这样
+在高并发的情况减少变量的锁同步。具体怎么做到的呢？先来看看线程池状态的表示，首先是 RUNNING 状态：
+
+`private static final int RUNNING = -1 << COUNT_BITS;`
+
+我们知道 `COUNT_BITS` 是 29， -1 的二进制值表示是 1 的二进制值，取反，然后加 1 ，就是 -1 的二进制表示。int 是 32 位，那么：
+
+`0000 0000 0000 0000 0000 0000 0000 0001`  **1 的二进制**  
+`1111 1111 1111 1111 1111 1111 1111 1110`  **取反**  
+`1111 1111 1111 1111 1111 1111 1111 1111`  **加 1 即为 -1 的二进制表示**  
+
+`RUNNING` 状态是左移 29 位，那么：
+
+`1111 1111 1111 1111 1111 1111 1111 1111` **-1 的二进制表示**  
+`1110 0000 0000 0000 0000 0000 0000 0000` **左移 29 后的值**
+
+即 `RUNNING` 的值是：`1110 0000 0000 0000 0000 0000 0000 0000`，
+
+同理得到：  
+`SHUTDOWN`&emsp;&nbsp;            的值是 `0000 0000 0000 0000 0000 0000 0000 0000`，  
+`STOP`&emsp;&emsp;&emsp;&nbsp;    的值是 `0010 0000 0000 0000 0000 0000 0000 0000`，    
+`TIDYING`&emsp;&nbsp;&nbsp;&nbsp; 的值是 `0100 0000 0000 0000 0000 0000 0000 0000`，  
+`TERMINATED`&nbsp;                的值是 `0110 0000 0000 0000 0000 0000 0000 0000`。  
+
+所以 `ctl` 变量的默认值是 `RUNNING` 的值 和 0 或运算，即 `ctl` = `1110 0000 0000 0000 0000 0000 0000 0000`，实际上意思就是线程池在 `RUNNING` 状态，但是 0 个工作线程。
+通过方法 runStateOf() 可以拿到当前线程池的状态值。
+
+上面说的是线程池状态的表示，再来看一下线程池中线程的个数，变量 COUNT_MASK 就是表示线程数的大小，最多（2^29 - 1） 个，通过方法 workerCountOf() 可以计算线程的个数。
+
+  - #### 构造方法
+构造方法主要是进行一些非空判断和校验。
+```java
+public class ThreadPoolExecutor extends AbstractExecutorService {
+	public ThreadPoolExecutor(int corePoolSize,
+		int maximumPoolSize,
+		long keepAliveTime,
+		TimeUnit unit,
+		BlockingQueue<Runnable> workQueue,
+		ThreadFactory threadFactory,
+		RejectedExecutionHandler handler) {
+		if (corePoolSize < 0 ||
+			maximumPoolSize <= 0 ||
+			maximumPoolSize < corePoolSize ||
+			keepAliveTime < 0)
+			throw new IllegalArgumentException();
+		if (workQueue == null || threadFactory == null || handler == null)
+			throw new NullPointerException();
+		this.corePoolSize = corePoolSize;
+		this.maximumPoolSize = maximumPoolSize;
+		this.workQueue = workQueue;
+		this.keepAliveTime = unit.toNanos(keepAliveTime); // 将存活时间转换成纳秒
+		this.threadFactory = threadFactory;
+		this.handler = handler;
+	}
+}
+```
+
+  - #### 提交任务的过程
+提交任务时，会调用 execute() 方法，我们来看一下这个方法：
+
+```java
+public class ThreadPoolExecutor extends AbstractExecutorService {
+	public void execute(Runnable command) {
+		if (command == null)
+			throw new NullPointerException();
+		/*
+		 * Proceed in 3 steps:
+		 *
+		 * 1. If fewer than corePoolSize threads are running, try to
+		 * start a new thread with the given command as its first
+		 * task.  The call to addWorker atomically checks runState and
+		 * workerCount, and so prevents false alarms that would add
+		 * threads when it shouldn't, by returning false.
+		 *
+		 * 2. If a task can be successfully queued, then we still need
+		 * to double-check whether we should have added a thread
+		 * (because existing ones died since last checking) or that
+		 * the pool shut down since entry into this method. So we
+		 * recheck state and if necessary roll back the enqueuing if
+		 * stopped, or start a new thread if there are none.
+		 *
+		 * 3. If we cannot queue task, then we try to add a new
+		 * thread.  If it fails, we know we are shut down or saturated
+		 * and so reject the task.
+		 */
+		int c = ctl.get();
+		if (workerCountOf(c) < corePoolSize) {
+			if (addWorker(command, true))  // 带了任务参数
+				return;
+			c = ctl.get();
+		}
+		if (isRunning(c) && workQueue.offer(command)) {
+			int recheck = ctl.get();
+			if (!isRunning(recheck) && remove(command))
+				reject(command);
+			else if (workerCountOf(recheck) == 0)
+				addWorker(null, false); // 没有带任务参数
+		} else if (!addWorker(command, false))
+			reject(command);
+	}
+}
+```
+execute() 方法的思路注释文档说的很清楚，首先非空判断，然后拿到 ctl 的值，来判断：  
+1. 值（默认是 0 ）小于核心线程数的
+   如果是小于就添加一个 Worker，这个 Worker 是 ThreadPoolExecutor 的内部类，简单来讲就是封装了线程信息和任务信息的类，后面再谈。
+2. 值大于核心线程数，
+  - 2.1 再判断线程池状态是 RUNNING 状态，就添加到工作队列当中去
+    - 2.1.1 这里注意的是还会再一次检查线程池的状态，以防线程池的状态在添加队列的过程中发生改变，如果发现线程池不是 RUNNING 状态的话，
+    那么就把队列里面的任务 remove 掉，然后调用拒绝策略来拒绝，默认是丢弃。
+    - 2.1.2 在 2.1.1 的基础判断上，如果线程池仍然是 RUNNING 的状态，但是 workerCountOf() 拿到的 worker 是 0，那么添加一个 worker，
+    这里只在线程池里面增加一个线程。这里我们可以看到核心线程数满了之后，先添加到队列，如果线程池中的 worker 是 0 的话，那么会新加一个线程，
+    核心线程会带着任务直接执行，而核心线程之外的线程是从队列里面取任务来执行的，注意 addWorker() 方法的调用。
+  - 2.2 线程池状态并不是 RUNNING 状态的话，或者任务进入队列失败了，尝试创建worker执行任务，实际上 addWorker() 方法里面也是判断了
+    线程池状态的，不是 RUNNING 状态的话直接返回 false，添加任务失败，触发 reject 策略。
+
+  - #### addWorker 分析
+在上面添加任务的分析过程中，主要是调用 addWorker() 的方法，现在来窥探下 addWorker() 方法：
+
+
+<details>
+<summary><b>点击展开:</b> addWorker() 方法</summary>
+
+```java
+public class ThreadPoolExecutor extends AbstractExecutorService {
+	
+    private boolean addWorker(Runnable firstTask, boolean core) {
+        retry:
+        for (int c = ctl.get(); ; ) {
+            // Check if queue empty only if necessary.
+            if (runStateAtLeast(c, SHUTDOWN)
+                    && (runStateAtLeast(c, STOP)
+                    || firstTask != null
+                    || workQueue.isEmpty()))
+                return false;
+
+            for (; ; ) {
+                if (workerCountOf(c)
+                        >= ((core ? corePoolSize : maximumPoolSize) & COUNT_MASK))
+                    return false;
+                if (compareAndIncrementWorkerCount(c))
+                    break retry;
+                c = ctl.get();  // Re-read ctl
+                if (runStateAtLeast(c, SHUTDOWN))
+                    continue retry;
+                // else CAS failed due to workerCount change; retry inner loop
+            }
+        }
+
+        boolean workerStarted = false;
+        boolean workerAdded = false;
+        Worker w = null;
+        try {
+            w = new Worker(firstTask);
+            final Thread t = w.thread;
+            if (t != null) {
+                final ReentrantLock mainLock = this.mainLock;
+                mainLock.lock();
+                try {
+                    // Recheck while holding lock.
+                    // Back out on ThreadFactory failure or if
+                    // shut down before lock acquired.
+                    int c = ctl.get();
+
+                    if (isRunning(c) ||
+                            (runStateLessThan(c, STOP) && firstTask == null)) {
+                        if (t.getState() != Thread.State.NEW)
+                            throw new IllegalThreadStateException();
+                        workers.add(w);
+                        workerAdded = true;
+                        int s = workers.size();
+                        if (s > largestPoolSize)
+                            largestPoolSize = s;
+                    }
+                } finally {
+                    mainLock.unlock();
+                }
+                if (workerAdded) {
+                    t.start();
+                    workerStarted = true;
+                }
+            }
+        } finally {
+            if (!workerStarted)
+                addWorkerFailed(w);
+        }
+        return workerStarted;
+    }
+}
+```
+
+</details>
+
+
+
+
+
+
+
